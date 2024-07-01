@@ -1,0 +1,114 @@
+python
+Copiar código
+import cv2
+import numpy as np
+import os
+from datetime import datetime
+
+# Paths to YOLO files
+weights_path = "yolo/yolov3.weights"
+config_path = "yolo/yolov3.cfg"
+names_path = "yolo/coco.names"
+
+# Load YOLO model
+net = cv2.dnn.readNet(weights_path, config_path)
+
+# Load class names
+with open(names_path, 'r') as f:
+    classes = [line.strip() for line in f.readlines()]
+
+layer_names = net.getLayerNames()
+output_layers = [layer_names[i[0] - 1] for i in net.getUnconnectedOutLayers()]
+
+# Define a function to detect cars
+def detect_cars(frame):
+    height, width, channels = frame.shape
+    blob = cv2.dnn.blobFromImage(frame, 0.00392, (416, 416), (0, 0, 0), True, crop=False)
+    net.setInput(blob)
+    outs = net.forward(output_layers)
+
+    class_ids = []
+    confidences = []
+    boxes = []
+
+    for out in outs:
+        for detection in out:
+            scores = detection[5:]
+            class_id = np.argmax(scores)
+            confidence = scores[class_id]
+            if confidence > 0.5 and class_id == classes.index('car'):
+                center_x = int(detection[0] * width)
+                center_y = int(detection[1] * height)
+                w = int(detection[2] * width)
+                h = int(detection[3] * height)
+
+                x = int(center_x - w / 2)
+                y = int(center_y - h / 2)
+
+                boxes.append([x, y, w, h])
+                confidences.append(float(confidence))
+                class_ids.append(class_id)
+
+    indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.5, 0.4)
+    detected_cars = []
+    for i in range(len(boxes)):
+        if i in indexes:
+            x, y, w, h = boxes[i]
+            detected_cars.append((x, y, w, h))
+
+    return detected_cars
+
+# Function to evaluate car condition
+def evaluate_car_condition(car_frame):
+    # Convertir la imagen a escala de grises
+    gray = cv2.cvtColor(car_frame, cv2.COLOR_BGR2GRAY)
+    
+    # Aplicar un umbral para detectar áreas oscuras (posible humo negro)
+    _, thresh = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY_INV)
+    
+    # Encontrar contornos en la imagen umbralizada
+    contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    
+    # Evaluar si hay humo negro basado en el tamaño y la cantidad de contornos
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area > 500:  # Este umbral debe ajustarse basado en pruebas
+            return 'bad'
+    
+    return 'good'
+
+def save_frame(frame, folder):
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{folder}/car_{timestamp}.jpg"
+    cv2.imwrite(filename, frame)
+
+def main():
+    cap = cv2.VideoCapture('path/to/your/video/stream')
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        detected_cars = detect_cars(frame)
+        
+        for (x, y, w, h) in detected_cars:
+            car_frame = frame[y:y+h, x:x+w]
+            
+            condition = evaluate_car_condition(car_frame)
+            if condition == 'bad':
+                date_folder = datetime.now().strftime("%Y-%m-%d")
+                save_frame(car_frame, date_folder)
+        
+        # Mostrar el cuadro para depuración
+        cv2.imshow('Frame', frame)
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
